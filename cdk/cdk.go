@@ -26,14 +26,10 @@ func NewCdkStack(scope constructs.Construct, id string, props *CdkStackProps) aw
 		sprops = props.StackProps
 	}
 	stack := awscdk.NewStack(scope, &id, &sprops)
-
-	CdkEc2(scope, &CdkEc2Props{
-		Stack:      stack,
+	CdkEc2(stack, &CdkEc2Props{
 		StackProps: props.StackProps,
-		Vpc: ec2.Vpc_FromLookup(scope, jsii.String("vscode-server-vpc"), &ec2.VpcLookupOptions{
-			VpcId: jsii.String("TODO:"),
-		}),
-		Subnet: ec2.Subnet_FromSubnetId(scope, jsii.String("vscode-subnet"), jsii.String("TODO:")),
+		VpcId:      jsii.String("vpc-TODO"),
+		SubnetId:   jsii.String("subnet-TODO"),
 	})
 
 	return stack
@@ -41,14 +37,14 @@ func NewCdkStack(scope constructs.Construct, id string, props *CdkStackProps) aw
 
 type CdkEc2Props struct {
 	awscdk.StackProps
-	awscdk.Stack
-	Vpc    ec2.IVpc
-	Subnet ec2.ISubnet
+	VpcId    *string
+	SubnetId *string
 }
 
 func CdkIAM(scope constructs.Construct, props awscdk.StackProps) iam.Role {
 	role := iam.NewRole(scope, jsii.String("iamrole-vscode-server"), &iam.RoleProps{
-		RoleName: jsii.String("iamrole-vscode-server"),
+		RoleName:  jsii.String("iamrole-vscode-server"),
+		AssumedBy: iam.NewServicePrincipal(jsii.String("ec2.amazonaws.com"), &iam.ServicePrincipalOpts{}),
 	})
 	role.AddManagedPolicy(iam.ManagedPolicy_FromAwsManagedPolicyName(jsii.String("AmazonSSMManagedInstanceCore")))
 	policy := iam.NewPolicy(scope, jsii.String("iamrole-vscode-server-allow-ssm-ssh"), &iam.PolicyProps{
@@ -67,26 +63,12 @@ func CdkIAM(scope constructs.Construct, props awscdk.StackProps) iam.Role {
 }
 
 func CdkEc2(scope constructs.Construct, props *CdkEc2Props) ec2.CfnInstance {
-	stack := props.Stack
 
-	sg := ec2.NewCfnSecurityGroup(stack, jsii.String("security-group-vscode"), &ec2.CfnSecurityGroupProps{
-		GroupName:        jsii.String("vscode-server-sg"),
-		GroupDescription: jsii.String("for vscode server"),
-		VpcId:            props.Vpc.VpcId(),
-		SecurityGroupIngress: &[]*ec2.CfnSecurityGroup_IngressProperty{
-			{
-				IpProtocol: jsii.String("tcp"),
-				CidrIp:     jsii.String("0.0.0.0/0"),
-				FromPort:   jsii.Number(22),
-				ToPort:     jsii.Number(22),
-			},
-			{
-				IpProtocol: jsii.String("tcp"),
-				CidrIp:     jsii.String("0.0.0.0/0"),
-				FromPort:   jsii.Number(80),
-				ToPort:     jsii.Number(80),
-			},
-		},
+	sg := ec2.NewCfnSecurityGroup(scope, jsii.String("security-group-vscode"), &ec2.CfnSecurityGroupProps{
+		GroupName:            jsii.String("vscode-server-sg"),
+		GroupDescription:     jsii.String("for vscode server"),
+		VpcId:                props.VpcId,
+		SecurityGroupIngress: &[]*ec2.CfnSecurityGroup_IngressProperty{},
 	})
 
 	role := CdkIAM(scope, props.StackProps)
@@ -97,10 +79,10 @@ func CdkEc2(scope constructs.Construct, props *CdkEc2Props) ec2.CfnInstance {
 		Storage:        ec2.AmazonLinuxStorage_GENERAL_PURPOSE,
 	})
 	// Instance
-	return ec2.NewCfnInstance(stack, jsii.String("ec2-instance-vscode"), &ec2.CfnInstanceProps{
+	return ec2.NewCfnInstance(scope, jsii.String("ec2-instance-vscode"), &ec2.CfnInstanceProps{
 		ImageId:            amznLinux.GetImage(scope).ImageId,
-		InstanceType:       jsii.String("t2.micro"),
-		SubnetId:           props.Subnet.SubnetId(),
+		InstanceType:       jsii.String("TODO-SIZE"),
+		SubnetId:           props.SubnetId,
 		SecurityGroupIds:   jsii.Strings(*sg.AttrGroupId()),
 		IamInstanceProfile: role.RoleArn(),
 		KeyName:            jsii.String(utils.EnvNames().KeyName),
@@ -142,22 +124,22 @@ func env() *awscdk.Environment {
 	// Account/Region-dependent features and context lookups will not work, but a
 	// single synthesized template can be deployed anywhere.
 	//---------------------------------------------------------------------------
-	return nil
+	// return nil
 
 	// Uncomment if you know exactly what account and region you want to deploy
 	// the stack to. This is the recommendation for production stacks.
 	//---------------------------------------------------------------------------
-	// return &awscdk.Environment{
-	//  Account: jsii.String("123456789012"),
-	//  Region:  jsii.String("us-east-1"),
-	// }
+	return &awscdk.Environment{
+		Account: jsii.String("123456789012"),
+		Region:  jsii.String("us-east-1"),
+	}
 
 	// Uncomment to specialize this stack for the AWS Account and Region that are
 	// implied by the current CLI configuration. This is recommended for dev
 	// stacks.
 	//---------------------------------------------------------------------------
 	// return &awscdk.Environment{
-	//  Account: jsii.String(os.Getenv("CDK_DEFAULT_ACCOUNT")),
-	//  Region:  jsii.String(os.Getenv("CDK_DEFAULT_REGION")),
+	// 	Account: jsii.String(os.Getenv("CDK_DEFAULT_ACCOUNT")),
+	// 	Region:  jsii.String(os.Getenv("CDK_DEFAULT_REGION")),
 	// }
 }
