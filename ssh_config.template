@@ -1,0 +1,4 @@
+host $ec2インスタンスのID
+     User $PLZ_FILL
+     IdentityFile $PLZ_FILL
+     ProxyCommand sh -c "aws ssm start-session --target %h --document-name AWS-StartSSHSession --parameters 'portNumber=%p'"
