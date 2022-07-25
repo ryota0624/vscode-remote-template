@@ -9,6 +9,8 @@ import (
 
 	"github.com/aws/aws-cdk-go/awscdk/v2"
 	ec2 "github.com/aws/aws-cdk-go/awscdk/v2/awsec2"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsevents"
+
 	iam "github.com/aws/aws-cdk-go/awscdk/v2/awsiam"
 
 	jsii "github.com/aws/jsii-runtime-go"
@@ -17,6 +19,7 @@ import (
 )
 
 type CdkStackProps struct {
+	Environment
 	awscdk.StackProps
 }
 
@@ -26,10 +29,15 @@ func NewCdkStack(scope constructs.Construct, id string, props *CdkStackProps) aw
 		sprops = props.StackProps
 	}
 	stack := awscdk.NewStack(scope, &id, &sprops)
-	CdkEc2(stack, &CdkEc2Props{
-		StackProps: props.StackProps,
-		VpcId:      jsii.String("vpc-TODO"),
-		SubnetId:   jsii.String("subnet-TODO"),
+	ec2 := CdkVSCodeServerEc2(stack, &CdkEc2Props{
+		StackProps:   props.StackProps,
+		VpcId:        props.Environment.VpcId,
+		SubnetId:     props.Environment.SubnetId,
+		InstanceSize: props.Environment.InstanceSize,
+	})
+
+	EC2StopEventBridge(stack, &EC2StopEventBridgeProps{
+		StopTargetEC2Arn: *ec2.Ref(),
 	})
 
 	return stack
@@ -37,11 +45,38 @@ func NewCdkStack(scope constructs.Construct, id string, props *CdkStackProps) aw
 
 type CdkEc2Props struct {
 	awscdk.StackProps
-	VpcId    *string
-	SubnetId *string
+	VpcId        *string
+	SubnetId     *string
+	InstanceSize *string
 }
 
-func CdkIAM(scope constructs.Construct, props awscdk.StackProps) iam.Role {
+type EC2StopEventBridgeProps struct {
+	StopTargetEC2Arn string
+}
+
+func EC2StopEventBridge(scope constructs.Construct, props *EC2StopEventBridgeProps) {
+	role := iam.NewRole(scope, jsii.String("iamrole-stop-vscode-server"), &iam.RoleProps{
+		RoleName:  jsii.String("iamrole-stop-vscode-server"),
+		AssumedBy: iam.NewServicePrincipal(jsii.String("events.amazon.com"), &iam.ServicePrincipalOpts{}),
+	})
+	role.AddManagedPolicy(iam.ManagedPolicy_FromAwsManagedPolicyName(jsii.String("AmazonSSMAutomationRole")))
+
+	awsevents.NewCfnRule(scope, jsii.String("vscode-server-stop"), &awsevents.CfnRuleProps{
+		ScheduleExpression: jsii.String("0 5 * * ? *"),
+		Name:               jsii.String("vscode-server-stop"),
+		Description:        jsii.String("to daily stop vscode server ec2 instance"),
+		Targets: []interface{}{
+			map[string]string{
+				"Arn":     "arn:aws:ssm:ap-northeast-1::automation-definition/AWS-StopEC2Instance:$DEFAULT",
+				"RoleArn": *role.RoleArn(),
+				"Input":   props.StopTargetEC2Arn,
+				"Id":      "TargetStopVsCodeEC2Instance",
+			},
+		},
+	})
+}
+
+func CdkVSCodeServerIAM(scope constructs.Construct, props awscdk.StackProps) iam.Role {
 	role := iam.NewRole(scope, jsii.String("iamrole-vscode-server"), &iam.RoleProps{
 		RoleName:  jsii.String("iamrole-vscode-server"),
 		AssumedBy: iam.NewServicePrincipal(jsii.String("ec2.amazonaws.com"), &iam.ServicePrincipalOpts{}),
@@ -62,7 +97,7 @@ func CdkIAM(scope constructs.Construct, props awscdk.StackProps) iam.Role {
 	return role
 }
 
-func CdkEc2(scope constructs.Construct, props *CdkEc2Props) ec2.CfnInstance {
+func CdkVSCodeServerEc2(scope constructs.Construct, props *CdkEc2Props) ec2.CfnInstance {
 
 	sg := ec2.NewCfnSecurityGroup(scope, jsii.String("security-group-vscode"), &ec2.CfnSecurityGroupProps{
 		GroupName:            jsii.String("vscode-server-sg"),
@@ -71,7 +106,7 @@ func CdkEc2(scope constructs.Construct, props *CdkEc2Props) ec2.CfnInstance {
 		SecurityGroupIngress: &[]*ec2.CfnSecurityGroup_IngressProperty{},
 	})
 
-	role := CdkIAM(scope, props.StackProps)
+	role := CdkVSCodeServerIAM(scope, props.StackProps)
 	amznLinux := ec2.NewAmazonLinuxImage(&ec2.AmazonLinuxImageProps{
 		Generation:     ec2.AmazonLinuxGeneration_AMAZON_LINUX,
 		Edition:        ec2.AmazonLinuxEdition_STANDARD,
@@ -81,7 +116,7 @@ func CdkEc2(scope constructs.Construct, props *CdkEc2Props) ec2.CfnInstance {
 	// Instance
 	return ec2.NewCfnInstance(scope, jsii.String("ec2-instance-vscode"), &ec2.CfnInstanceProps{
 		ImageId:            amznLinux.GetImage(scope).ImageId,
-		InstanceType:       jsii.String("TODO-SIZE"),
+		InstanceType:       props.InstanceSize,
 		SubnetId:           props.SubnetId,
 		SecurityGroupIds:   jsii.Strings(*sg.AttrGroupId()),
 		IamInstanceProfile: role.RoleArn(),
@@ -107,19 +142,33 @@ func getUserData() string {
 
 func main() {
 	app := awscdk.NewApp(nil)
+	environment := env()
 
 	NewCdkStack(app, "CdkStack", &CdkStackProps{
+		*environment,
 		awscdk.StackProps{
-			Env: env(),
+			Env: &environment.Environment,
 		},
 	})
 
 	app.Synth(nil)
 }
 
+// TODO: TODOとついているリソースIDやサイズ指定をenvからできるようにしたい。
+// 	EC2インスタンスの自動停止
+//  EC2インスタンスのコマンド一発起動
+//  budgetアラート
+
+type Environment struct {
+	awscdk.Environment
+	VpcId        *string
+	SubnetId     *string
+	InstanceSize *string
+}
+
 // env determines the AWS environment (account+region) in which our stack is to
 // be deployed. For more information see: https://docs.aws.amazon.com/cdk/latest/guide/environments.html
-func env() *awscdk.Environment {
+func env() *Environment {
 	// If unspecified, this stack will be "environment-agnostic".
 	// Account/Region-dependent features and context lookups will not work, but a
 	// single synthesized template can be deployed anywhere.
@@ -129,17 +178,13 @@ func env() *awscdk.Environment {
 	// Uncomment if you know exactly what account and region you want to deploy
 	// the stack to. This is the recommendation for production stacks.
 	//---------------------------------------------------------------------------
-	return &awscdk.Environment{
-		Account: jsii.String("123456789012"),
-		Region:  jsii.String("us-east-1"),
+	return &Environment{
+		Environment: awscdk.Environment{
+			Account: jsii.String(os.Getenv("CDK_DEFAULT_ACCOUNT")),
+			Region:  jsii.String(os.Getenv("CDK_DEFAULT_REGION")),
+		},
+		SubnetId:     jsii.String(os.Getenv("VSCODE_SUBNET_ID")),
+		VpcId:        jsii.String(os.Getenv("VSCODE_VPC_ID")),
+		InstanceSize: jsii.String(os.Getenv("VSCODE_INSTANCE_SIZE")),
 	}
-
-	// Uncomment to specialize this stack for the AWS Account and Region that are
-	// implied by the current CLI configuration. This is recommended for dev
-	// stacks.
-	//---------------------------------------------------------------------------
-	// return &awscdk.Environment{
-	// 	Account: jsii.String(os.Getenv("CDK_DEFAULT_ACCOUNT")),
-	// 	Region:  jsii.String(os.Getenv("CDK_DEFAULT_REGION")),
-	// }
 }
